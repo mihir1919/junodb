@@ -26,7 +26,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Payload (or KeyValue) Component is a type in which we will have the Namespace, key and value fileds.
+ * Payload (or KeyValue) Component is a type in which we will have the
+ * Namespace, key and value fileds.
  */
 public class PayloadOperationMessage {
 	private static final Logger logger = LoggerFactory.getLogger(PayloadOperationMessage.class);
@@ -46,9 +47,10 @@ public class PayloadOperationMessage {
 	public enum CompressionType {
 		None("None"),
 		Snappy("Snappy");
+
 		// More algorithm to be added in future
 		private final String cmpType;
-		
+
 		private static final Map<String, CompressionType> lookup = new HashMap<String, CompressionType>();
 
 		static {
@@ -56,7 +58,7 @@ public class PayloadOperationMessage {
 					.allOf(CompressionType.class))
 				lookup.put(s.getCompressionType(), s);
 		}
-		
+
 		CompressionType(String cmpText) {
 			this.cmpType = cmpText;
 		}
@@ -64,8 +66,8 @@ public class PayloadOperationMessage {
 		public String getCompressionType() {
 			return cmpType;
 		}
-		
-		public static CompressionType getCompressionType(String ctype){
+
+		public static CompressionType getCompressionType(String ctype) {
 			return lookup.get(ctype);
 		}
 	};
@@ -128,33 +130,33 @@ public class PayloadOperationMessage {
 
 	public void setCompressionType(CompressionType compressionType) {
 		this.compType = compressionType;
-		if(compressionType == CompressionType.None){
+		if (compressionType == CompressionType.None) {
 			this.isPloadCompressed = false;
-		}else{
+		} else {
 			this.isPloadCompressed = true;
 		}
 	}
-	
+
 	public PayloadOperationMessage(long componentSize, byte tag) {
 		this.componentSize = componentSize;
 		this.tag = tag;
 		this.isPloadCompressed = false;
 		this.compType = CompressionType.None;
 	}
-	
+
 	public int getBufferLength() {
 		// componentSize(4) + tag(1) + this.nameSpaceLength(1) +
 		// key(2) + value(4)
 		long valueFieldLen = 0;
 		// TO DO. Optimize this section when adding more compression types
-		if(this.valueLength != 0){
+		if (this.valueLength != 0) {
 			valueFieldLen = this.valueLength + 1; // 1 byte for payload type
-			if(this.isPloadCompressed){ // compression enabled
+			if (this.isPloadCompressed) { // compression enabled
 				valueFieldLen += 1; // 1 byte for size of compression type
 				valueFieldLen += this.compType.getCompressionType().length();
 			}
 		}
-		
+
 		int size = (int) (12 + this.namespace.length + this.key.length + valueFieldLen);
 		int offset = size % 8;
 		if (offset != 0) {
@@ -163,81 +165,83 @@ public class PayloadOperationMessage {
 		this.componentSize = size;
 		return size;
 	}
-	
-	//	** Payload (or KeyValue) Component **
-	//	 
-	//	A 12-byte header followed by name, key and value
-	//		Tag/ID: 0x01 
-	//	* Header *
-	//	 
-	//	      |0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|
-	//	      |              0|              1|              2|              3|
-	//	------+---------------+---------------+---------------+---------------+
-	//	    0 | Size                                                          |
-	//	------+---------------+---------------+-------------------------------+
-	//	    4 | Tag/ID (0x01) | namespace len | key length                    |
-	//	------+---------------+---------------+-------------------------------+
-	//	    8 | payload length                                                |
-	//	------+---------------------------------------------------------------+
-	//	 
-	//	 (
-	//	  The max namespace length: 255
-	//	  payload length = 0 if len(payload data) = 0, otherwise,
-	//	  payload length = 1 + len(payload data) = len(payload field)
-	//	 )
-	//	 
-	//	 
-	//	* Body *
-	//	+---------+-----+---------------+-------------------------+
-	//	|namespace| key | payload field | Padding to align 8-byte |
-	//	+---------+-----+---------------+-------------------------+
-	//	 
-	//	* Payload field*
-	//	+---------------------+--------------+
-	//	| 1 byte payload type | Payload data |
-	//	+---------------------+--------------+
-	//	 
-	//	* Payload Type
-	//	0: payload data is the actual value passed from client user
-	//	1: payload data is encrypted by Juno client library, details not specified
-	//	2: payload data is encrypted by Juno proxy with AES-GCM. encryption key length is 256 bits
-	//	3: Payload data is compressed by Juno Client library.
-	//	 
-	//	* Payload data
-	//	for payload type 2
-	//	+--------------------------------+----------------+----------------+
-	//	| 4 bytes encryption key version | 12 bytes nonce | encrypted data | 
-	//	+--------------------------------+----------------+----------------+
+
+	// ** Payload (or KeyValue) Component **
 	//
-	//	for payload type 3
-	//	+-------------------------------------+--------------------+------------+
-	//	| 1 byte size of compression type | compression type | compressed data  |
-	//	+-------------------------------------+--------------------+------------+
+	// A 12-byte header followed by name, key and value
+	// Tag/ID: 0x01
+	// * Header *
 	//
-	//	* compression types
-	//  1) snappy-v1 (default algorithm)
-	//	2) zlib-1.2.3
+	// |0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|
+	// | 0| 1| 2| 3|
+	// ------+---------------+---------------+---------------+---------------+
+	// 0 | Size |
+	// ------+---------------+---------------+-------------------------------+
+	// 4 | Tag/ID (0x01) | namespace len | key length |
+	// ------+---------------+---------------+-------------------------------+
+	// 8 | payload length |
+	// ------+---------------------------------------------------------------+
+	//
+	// (
+	// The max namespace length: 255
+	// payload length = 0 if len(payload data) = 0, otherwise,
+	// payload length = 1 + len(payload data) = len(payload field)
+	// )
+	//
+	//
+	// * Body *
+	// +---------+-----+---------------+-------------------------+
+	// |namespace| key | payload field | Padding to align 8-byte |
+	// +---------+-----+---------------+-------------------------+
+	//
+	// * Payload field*
+	// +---------------------+--------------+
+	// | 1 byte payload type | Payload data |
+	// +---------------------+--------------+
+	//
+	// * Payload Type
+	// 0: payload data is the actual value passed from client user
+	// 1: payload data is encrypted by Juno client library, details not specified
+	// 2: payload data is encrypted by Juno proxy with AES-GCM. encryption key
+	// length is 256 bits
+	// 3: Payload data is compressed by Juno Client library.
+	//
+	// * Payload data
+	// for payload type 2
+	// +--------------------------------+----------------+----------------+
+	// | 4 bytes encryption key version | 12 bytes nonce | encrypted data |
+	// +--------------------------------+----------------+----------------+
+	//
+	// for payload type 3
+	// +-------------------------------------+--------------------+------------+
+	// | 1 byte size of compression type | compression type | compressed data |
+	// +-------------------------------------+--------------------+------------+
+	//
+	// * compression types
+	// 1) snappy-v1 (default algorithm)
+	// 2) zlib-1.2.3
 
 	public PayloadOperationMessage readBuf(ByteBuf in) {
-		this.nameSpaceLength = in.readByte();		 // Name space length
-		this.keyLength = in.readUnsignedShort();     // Key length
-		long valueFieldLen = in.readUnsignedInt();   // Payload legth = 1(payload type) + len(payload data) = len(payload field) or Payload legth = 0 if no payload
+		this.nameSpaceLength = in.readByte(); // Name space length
+		this.keyLength = in.readUnsignedShort(); // Key length
+		long valueFieldLen = in.readUnsignedInt(); // Payload legth = 1(payload type) + len(payload data) = len(payload
+													// field) or Payload legth = 0 if no payload
 
-		this.namespace = new byte[(short)(this.nameSpaceLength & 0xff)];
-		
-		//Start reading the body
+		this.namespace = new byte[(short) (this.nameSpaceLength & 0xff)];
+
+		// Start reading the body
 		in.readBytes(this.namespace);
 		this.key = new byte[this.keyLength];
 		in.readBytes(this.key);
 		if (valueFieldLen > 0) {
-			this.valueLength = valueFieldLen - 1;			//read Payload type
+			this.valueLength = valueFieldLen - 1; // read Payload type
 			int payloadType = in.readByte();
-			if(payloadType == 3){   // check for payload compression
+			if (payloadType == 3) { // check for payload compression
 				int compTypeSize = in.readByte(); // read size of compressipn type
 				this.valueLength--;
-				byte [] compType = new byte[compTypeSize];
-				in.readBytes(compType); 	//read compression type
-				this.valueLength -= compTypeSize; // This is actual compressed payload size 
+				byte[] compType = new byte[compTypeSize];
+				in.readBytes(compType); // read compression type
+				this.valueLength -= compTypeSize; // This is actual compressed payload size
 				setCompressionType(CompressionType.getCompressionType(new String(compType)));
 			}
 			this.value = new byte[(int) this.valueLength];
@@ -258,14 +262,14 @@ public class PayloadOperationMessage {
 		out.writeInt((int) this.componentSize);
 		out.writeByte(this.tag);
 		out.writeByte(this.nameSpaceLength);
-		out.writeShort((short)this.keyLength);
+		out.writeShort((short) this.keyLength);
 
 		int payloadLen = 0;
-		if(this.valueLength != 0){
-			payloadLen = (int)this.valueLength+1;
-			if(this.isPloadCompressed){ // compression enabled
-					payloadLen += 1; // 1 byte for compression type size
-					payloadLen += this.compType.getCompressionType().length();
+		if (this.valueLength != 0) {
+			payloadLen = (int) this.valueLength + 1;
+			if (this.isPloadCompressed) { // compression enabled
+				payloadLen += 1; // 1 byte for compression type size
+				payloadLen += this.compType.getCompressionType().length();
 			}
 		}
 		out.writeInt(payloadLen);
@@ -276,11 +280,11 @@ public class PayloadOperationMessage {
 			logger.debug("namespace: " + new String(namespace));
 		}
 		if (payloadLen != 0) {
-			if(isPloadCompressed){ // if compression is enabled
+			if (isPloadCompressed) { // if compression is enabled
 				out.writeByte(3);
 				out.writeByte(compType.getCompressionType().length());
 				out.writeBytes(this.compType.getCompressionType().getBytes());
-			}else{
+			} else {
 				out.writeZero(1);
 			}
 			out.writeBytes(this.value);
