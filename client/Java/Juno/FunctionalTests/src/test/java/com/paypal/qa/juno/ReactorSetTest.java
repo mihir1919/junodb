@@ -1032,7 +1032,7 @@ public class ReactorSetTest{
 
                 JunoPropertiesProvider prop = new JunoPropertiesProvider(pConfig2);
                 prop = new JunoPropertiesProvider(pConfig);
-                int dataLength = Snappy.compress(data).length;
+                int dataLength = .compress(data).length;
                 LOGGER.info("data original length is " + data.length + ", compressed length is " + dataLength);
 
 		JunoResponse junoResponse = junoReactClient.delete(key).block();

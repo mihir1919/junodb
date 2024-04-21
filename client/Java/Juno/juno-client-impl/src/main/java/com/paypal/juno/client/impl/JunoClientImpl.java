@@ -75,6 +75,14 @@ class JunoClientImpl implements JunoClient{
 	 * @throws JunoException - Throws Exception if any issue while processing the request
 	 */
 	public JunoResponse get(byte[] key) throws JunoException {
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
+		System.out.println("FUCKFUCKFUCK");
 		return reactClient.get(key).block();
 	}
 
@@ -87,6 +95,14 @@ class JunoClientImpl implements JunoClient{
 	 * @throws JunoException - Throws Exception if any exception while processing the request
 	 */
 	public JunoResponse get(byte[] key, long timeToLiveSec) throws JunoException {
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
+		System.out.println("TEST");
 		return reactClient.get(key, timeToLiveSec).block();
 	}
 
