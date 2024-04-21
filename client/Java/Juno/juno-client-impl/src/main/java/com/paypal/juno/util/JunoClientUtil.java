@@ -39,10 +39,15 @@ import org.slf4j.LoggerFactory;
 import org.xerial.snappy.Snappy;
 import reactor.core.publisher.FluxSink;
 import rx.Subscriber;
+import net.jpountz.lz4.*;
+import com.github.luben.zstd.*;
+import java.util.zip.*;
+import java.io.ByteArrayOutputStream;
+import java.util.zip.GZIPOutputStream;
 
 public class JunoClientUtil {
 
-    //Juno Input Errors
+    // Juno Input Errors
     private static final String NULL_OR_EMPTY_KEY = "null_or_empty_key";
     private static final String MAX_KEY_SIZE_EXCEEDED = "key_size_exceeded";
     private static final String PAYLOAD_EXCEEDS_MAX_LIMIT = "payload_size_exceeded";
@@ -66,46 +71,51 @@ public class JunoClientUtil {
         }
     }
 
-    public static boolean checkForRetry(OperationStatus status){
-        if(status == OperationStatus.RecordLocked || status == OperationStatus.TTLExtendFailure ||
-                status == OperationStatus.InternalError || status == OperationStatus.NoStorage ){
+    public static boolean checkForRetry(OperationStatus status) {
+        if (status == OperationStatus.RecordLocked || status == OperationStatus.TTLExtendFailure ||
+                status == OperationStatus.InternalError || status == OperationStatus.NoStorage) {
             return true;
-        }else{
+        } else {
             return false;
         }
     }
 
     /**
      * Validate all the requests in a batch
+     * 
      * @param req - list of requests in a batch
-     * @param t - Subscriber for this batch
+     * @param t   - Subscriber for this batch
      * @return junoMsgMap - Map of Juno request ID and Juno message
      */
-    public static ConcurrentHashMap<UUID,JunoMessage> bulkValidate(Iterable<JunoRequest> req, Subscriber<? super JunoResponse> t,
-                                                                   JunoClientConfigHolder configHolder, SocketConfigHolder sockConfig,
-                                                                   boolean isAsync) {
+    public static ConcurrentHashMap<UUID, JunoMessage> bulkValidate(Iterable<JunoRequest> req,
+            Subscriber<? super JunoResponse> t,
+            JunoClientConfigHolder configHolder, SocketConfigHolder sockConfig,
+            boolean isAsync) {
         Iterator<JunoRequest> reqIter = req.iterator();
-        final ConcurrentHashMap<UUID,JunoMessage> junoMsgMap = new ConcurrentHashMap<UUID,JunoMessage>();
-        while(reqIter.hasNext()){
+        final ConcurrentHashMap<UUID, JunoMessage> junoMsgMap = new ConcurrentHashMap<UUID, JunoMessage>();
+        while (reqIter.hasNext()) {
             JunoRequest request = reqIter.next();
-            try{
-                JunoMessage jMsg = validateInput(request, getType(request.getType()),configHolder);
+            try {
+                JunoMessage jMsg = validateInput(request, getType(request.getType()), configHolder);
                 jMsg.setStatus(ServerOperationStatus.ResponseTimedout); // Set all request status as response timed out.
                 jMsg.setReqStartTime(System.currentTimeMillis());
-                junoMsgMap.put(jMsg.getReqId(),jMsg);
-            }catch(Exception e){
-                final Map<String,CharSequence> childTrans = new HashMap<String, CharSequence>();
-                if(request.key() !=null && request.key().length != 0) {
+                junoMsgMap.put(jMsg.getReqId(), jMsg);
+            } catch (Exception e) {
+                final Map<String, CharSequence> childTrans = new HashMap<String, CharSequence>();
+                if (request.key() != null && request.key().length != 0) {
                     childTrans.put("hex_key", Hex.encodeHexString(request.key()));
                 }
-                childTrans.put("exception",e.getMessage());
+                childTrans.put("exception", e.getMessage());
                 LOGGER.error(JunoStatusCode.ERROR + " {} ", childTrans);
-                if(e.getCause() != null)
-                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_"+ request.getType().getOpType(), OperationStatus.IllegalArgument.getErrorText(),e.getCause().getMessage());
+                if (e.getCause() != null)
+                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_" + request.getType().getOpType(),
+                            OperationStatus.IllegalArgument.getErrorText(), e.getCause().getMessage());
                 else
-                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_"+ request.getType().getOpType(), OperationStatus.IllegalArgument.getErrorText());
+                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_" + request.getType().getOpType(),
+                            OperationStatus.IllegalArgument.getErrorText());
                 LOGGER.error(e.getMessage());
-                JunoResponse resp = new JunoResponse(request.key(),request.getValue(),request.getVersion(),request.getTimeToLiveSec(),request.getCreationTime(),OperationStatus.IllegalArgument);
+                JunoResponse resp = new JunoResponse(request.key(), request.getValue(), request.getVersion(),
+                        request.getTimeToLiveSec(), request.getCreationTime(), OperationStatus.IllegalArgument);
                 t.onNext(resp);
             }
         }
@@ -114,72 +124,136 @@ public class JunoClientUtil {
 
     /**
      * Validate all the requests in a batch
+     * 
      * @param req - list of requests in a batch
-     * @param t - Subscriber for this batch
+     * @param t   - Subscriber for this batch
      * @return junoMsgMap - Map of Juno request ID and Juno message
      */
-    public static ConcurrentHashMap<UUID,JunoMessage> bulkValidate(Iterable<JunoRequest> req, FluxSink<JunoResponse> t,
-                                                                   JunoClientConfigHolder configHolder, SocketConfigHolder sockConfig,
-                                                                   boolean isAsync) {
+    public static ConcurrentHashMap<UUID, JunoMessage> bulkValidate(Iterable<JunoRequest> req, FluxSink<JunoResponse> t,
+            JunoClientConfigHolder configHolder, SocketConfigHolder sockConfig,
+            boolean isAsync) {
         Iterator<JunoRequest> reqIter = req.iterator();
-        final ConcurrentHashMap<UUID,JunoMessage> junoMsgMap = new ConcurrentHashMap<UUID,JunoMessage>();
-        while(reqIter.hasNext()){
+        final ConcurrentHashMap<UUID, JunoMessage> junoMsgMap = new ConcurrentHashMap<UUID, JunoMessage>();
+        while (reqIter.hasNext()) {
             JunoRequest request = reqIter.next();
-            try{
-                JunoMessage jMsg = validateInput(request, getType(request.getType()),configHolder);
+            try {
+                JunoMessage jMsg = validateInput(request, getType(request.getType()), configHolder);
                 jMsg.setStatus(ServerOperationStatus.ResponseTimedout); // Set all request status as response timed out.
                 jMsg.setReqStartTime(System.currentTimeMillis());
-                junoMsgMap.put(jMsg.getReqId(),jMsg);
-            }catch(Exception e){
-                final Map<String,CharSequence> childTrans = new HashMap<String, CharSequence>();
-                if(request.key() !=null && request.key().length != 0) {
+                junoMsgMap.put(jMsg.getReqId(), jMsg);
+            } catch (Exception e) {
+                final Map<String, CharSequence> childTrans = new HashMap<String, CharSequence>();
+                if (request.key() != null && request.key().length != 0) {
                     childTrans.put("hex_key", Hex.encodeHexString(request.key()));
                 }
-                childTrans.put("exception",e.getMessage());
+                childTrans.put("exception", e.getMessage());
                 LOGGER.error(JunoStatusCode.ERROR + " {} ", childTrans);
-                if(e.getCause() != null)
-                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_"+ request.getType().getOpType(), OperationStatus.IllegalArgument.getErrorText(),e.getCause().getMessage());
+                if (e.getCause() != null)
+                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_" + request.getType().getOpType(),
+                            OperationStatus.IllegalArgument.getErrorText(), e.getCause().getMessage());
                 else
-                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_"+ request.getType().getOpType(), OperationStatus.IllegalArgument.getErrorText());
+                    JunoMetrics.recordOpCount(sockConfig.getJunoPool(), "B_" + request.getType().getOpType(),
+                            OperationStatus.IllegalArgument.getErrorText());
                 LOGGER.error(e.getMessage());
-                JunoResponse resp = new JunoResponse(request.key(),request.getValue(),request.getVersion(),request.getTimeToLiveSec(),request.getCreationTime(),OperationStatus.IllegalArgument);
+                JunoResponse resp = new JunoResponse(request.key(), request.getValue(), request.getVersion(),
+                        request.getTimeToLiveSec(), request.getCreationTime(), OperationStatus.IllegalArgument);
                 t.next(resp);
             }
         }
         return junoMsgMap;
     }
+
     /**
      * Validate the user supplied inputs for limits based on the operation type
+     * 
      * @param req - Request parameters to be validated
      * @param opr - Type of Operation
      * @return JunoMessage - JunoMessage object formed out of the request.
      */
-    public static JunoMessage validateInput(JunoRequest req, JunoMessage.OperationType opr, JunoClientConfigHolder configHolder) throws IllegalArgumentException{
+    public static JunoMessage validateInput(JunoRequest req, JunoMessage.OperationType opr,
+            JunoClientConfigHolder configHolder) throws IllegalArgumentException {
 
-        //Null and empty Key validation is moved from JunoRequest object to here
+        // Null and empty Key validation is moved from JunoRequest object to here
         if (req.key() == null || req.key().length == 0) {
-			throw new IllegalArgumentException("The Document key must not be null or empty",new JunoInputException(NULL_OR_EMPTY_KEY));
-		}
+            throw new IllegalArgumentException("The Document key must not be null or empty",
+                    new JunoInputException(NULL_OR_EMPTY_KEY));
+        }
 
-        long recordTtl = (long)((req.getTimeToLiveSec() == null) ? configHolder.getDefaultLifetimeSecs() : req.getTimeToLiveSec());
-        JunoMessage junoMsg = new JunoMessage(req.key(),req.getValue(),req.getVersion(),0,recordTtl,opr);
+        long recordTtl = (long) ((req.getTimeToLiveSec() == null) ? configHolder.getDefaultLifetimeSecs()
+                : req.getTimeToLiveSec());
+        JunoMessage junoMsg = new JunoMessage(req.key(), req.getValue(), req.getVersion(), 0, recordTtl, opr);
 
         if (req.key().length > configHolder.getMaxKeySize()) {
-            throw new IllegalArgumentException("The Document key must not be larger than "+configHolder.getMaxKeySize()+" bytes",
+            throw new IllegalArgumentException(
+                    "The Document key must not be larger than " + configHolder.getMaxKeySize() + " bytes",
                     new JunoInputException(MAX_KEY_SIZE_EXCEEDED));
         }
 
-        //Validate the Payload. Payload cannot be > 204800 bytes
-        if(opr != JunoMessage.OperationType.Get && opr != JunoMessage.OperationType.Destroy){
-            byte [] payload = req.getValue();
-            if(req.getValue() == null){
+        // Validate the Payload. Payload cannot be > 204800 bytes
+        if (opr != JunoMessage.OperationType.Get && opr != JunoMessage.OperationType.Destroy) {
+            byte[] payload = req.getValue();
+            if (req.getValue() == null) {
                 payload = new byte[0];
-            }else if(payload != null && payload.length > 1024 && configHolder.getUsePayloadCompression()){
+            } else if (payload != null && payload.length > 1024 && configHolder.getUsePayloadCompression()) {
                 try {
-                    byte [] compressedPayload = Snappy.compress(req.getValue());
+                    byte[] compressedPayload = Snappy.compress(req.getValue());
+
+                    // Assuming req.getValue() returns a byte array
+                    byte[] uncompressedData = req.getValue();
+
+                    // Create a compression instance
+                    LZ4Factory factory = LZ4Factory.fastestInstance();
+                    LZ4Compressor compressor = factory.fastCompressor();
+
+                    // Allocate buffer for compressed data
+                    int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
+                    byte[] compressedData = new byte[maxCompressedLength];
+
+                    // Compress the data
+                    int compressedLength = compressor.compress(uncompressedData, 0, uncompressedData.length,
+                            compressedData, 0);
+
+                    // If you want to resize the array to fit the exact compressed data, you can do
+                    // so
+                    byte[] compressedPayloadLZ4 = Arrays.copyOf(compressedData, compressedLength);
+
+                    // Assuming req.getValue() returns a byte array
+                    byte[] uncompressedDataZS = req.getValue();
+                    byte[] compressedDataZS = null;
+                    try {
+                        // Compress the data
+                        compressedDataZS = Zstd.compress(uncompressedDataZS);
+
+                        // Now you have the compressed data in compressedDataZS array
+                    } catch (Exception e) {
+                        // Handle any potential exceptions thrown by the compression process
+                        e.printStackTrace(); // Or handle it according to your application's logic
+                    }
+
+                    byte[] compressedDataGZIP = null;
+
+                    try {
+                        // Create a ByteArrayOutputStream to hold the compressed data
+                        ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+
+                        // Create a GZIPOutputStream to compress the data
+                        try (GZIPOutputStream gzipStream = new GZIPOutputStream(byteStream)) {
+                            // Write the uncompressed data to the GZIPOutputStream
+                            gzipStream.write(uncompressedData);
+                        }
+
+                        // Get the compressed data as a byte array
+                        compressedDataGZIP = byteStream.toByteArray();
+
+                        // Now you have the compressed data in the compressedData array
+                    } catch (IOException e) {
+                        // Handle any potential IO exceptions
+                        e.printStackTrace(); // Or handle it according to your application's logic
+                    }
+
                     // Calculate % compression achieved
-                    int compPercent = 100 - ((compressedPayload.length * 100)/req.getValue().length);
-                    if(compPercent > 0){ // do compression only if its effective
+                    int compPercent = 100 - ((compressedPayload.length * 100) / req.getValue().length);
+                    if (compPercent > 0) { // do compression only if its effective
                         payload = compressedPayload;
                         // Currently we have only one compression type
                         junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.Snappy);
@@ -190,35 +264,37 @@ public class JunoClientUtil {
                     // Exception while compressing so continue without compressing
                 }
             }
-            if(payload.length > configHolder.getMaxValueSize()) {
-                String error = "The Document Value must not be larger than 204800 bytes. Current value size=" + payload.length;
+            if (payload.length > configHolder.getMaxValueSize()) {
+                String error = "The Document Value must not be larger than 204800 bytes. Current value size="
+                        + payload.length;
                 throw new IllegalArgumentException(error, new JunoInputException(PAYLOAD_EXCEEDS_MAX_LIMIT));
             }
             junoMsg.setValue(payload);
         }
 
-        //Validate TTL
-        if( recordTtl < 0){
+        // Validate TTL
+        if (recordTtl < 0) {
             String error = "The Document's TTL cannot be negative. Current lifetime=" + recordTtl;
-            throw new IllegalArgumentException(error,new JunoInputException(ZERO_OR_NEGATIVE_TTL));
-        }else if(recordTtl > configHolder.getMaxLifetimeSecs() ){
-            String error = "Invalid lifetime. current lifetime=" + recordTtl + ", max configured lifetime=" + configHolder.getMaxLifetimeSecs();
-            throw new IllegalArgumentException(error,new JunoInputException(TTL_EXCEEDS_MAX));
+            throw new IllegalArgumentException(error, new JunoInputException(ZERO_OR_NEGATIVE_TTL));
+        } else if (recordTtl > configHolder.getMaxLifetimeSecs()) {
+            String error = "Invalid lifetime. current lifetime=" + recordTtl + ", max configured lifetime="
+                    + configHolder.getMaxLifetimeSecs();
+            throw new IllegalArgumentException(error, new JunoInputException(TTL_EXCEEDS_MAX));
         }
 
-        switch(opr){
+        switch (opr) {
             case Create:
-                if(recordTtl == 0 || recordTtl < 0){
+                if (recordTtl == 0 || recordTtl < 0) {
                     String error = "The Document's TTL cannot be 0 or negative.";
-                    throw new IllegalArgumentException(error,new JunoInputException(ZERO_OR_NEGATIVE_TTL));
+                    throw new IllegalArgumentException(error, new JunoInputException(ZERO_OR_NEGATIVE_TTL));
                 }
                 break;
             case Update:
             case Set:
                 break;
             case CompareAndSet:
-                if(req.getVersion() < 1){
-                    String error = "The Document version cannot be less than 1. Current version="+req.getVersion();
+                if (req.getVersion() < 1) {
+                    String error = "The Document version cannot be less than 1. Current version=" + req.getVersion();
                     throw new IllegalArgumentException(error, new JunoInputException(ZERO_OR_NEGATIVE_VERSION));
                 }
                 break;
@@ -236,11 +312,12 @@ public class JunoClientUtil {
 
     /**
      * Mapping between the Optype in Request and Optype in JunoMessage
+     * 
      * @param opType - JunoRequest.OperationType
      * @return JunoMesage.OperationType
      */
-    private static JunoMessage.OperationType getType(JunoRequest.OperationType opType){
-        switch(opType){
+    private static JunoMessage.OperationType getType(JunoRequest.OperationType opType) {
+        switch (opType) {
             case Create:
                 return JunoMessage.OperationType.Create;
             case Get:
@@ -252,13 +329,15 @@ public class JunoClientUtil {
             case Destroy:
                 return JunoMessage.OperationType.Destroy;
             default:
-                return 	JunoMessage.OperationType.Nop;
+                return JunoMessage.OperationType.Nop;
         }
     }
+
     /**
      * This method creates the Juno operation protocol message object
+     * 
      * @param junoMsg - Juno Message object
-     * @param opaque - To identify a request
+     * @param opaque  - To identify a request
      * @return OperationMessage - Operation request message
      */
     public static OperationMessage createOperationMessage(JunoMessage junoMsg, Integer opaque) {
@@ -285,33 +364,37 @@ public class JunoClientUtil {
             default:
                 throw new JunoException("internal Error, invalid type: " + junoMsg.getOpType().ordinal());
         }
-        //int flags = MessageRQ.TwoWayRequest.ordinal();
+        // int flags = MessageRQ.TwoWayRequest.ordinal();
         header.setMsgType((byte) MessageHeader.MessageType.OperationalMessage.ordinal());
         header.setFlags((byte) 0); // This field is not significant for client.
         header.setMessageRQ((byte) MessageHeader.MessageRQ.TwoWayRequest.ordinal());
-        header.setOpcode((short)code.ordinal());
+        header.setOpcode((short) code.ordinal());
         header.setOpaque(opaque);
         header.setStatus((byte) ServerOperationStatus.BadMsg.getCode());
         opMsg.setHeader(header);
 
-        //************************* Form the Meta Component **************************
-        MetaOperationMessage metaComponents = new MetaOperationMessage(0L,(byte)OperationMessage.Type.Meta.getValue());
+        // ************************* Form the Meta Component **************************
+        MetaOperationMessage metaComponents = new MetaOperationMessage(0L,
+                (byte) OperationMessage.Type.Meta.getValue());
         opMsg.setMetaComponent(metaComponents);
         List<MetaMessageTagAndType> list = opMsg.getMetaComponent().getFieldList();
 
-        //Check for version and add
-        int version = (int)junoMsg.getVersion();
+        // Check for version and add
+        int version = (int) junoMsg.getVersion();
         if (version != 0) {
-            MetaMessageFixedField field = new MetaMessageFixedField((byte) ((MetaMessageTagAndType.FieldType.Version.ordinal()) | (1 << 5)));
+            MetaMessageFixedField field = new MetaMessageFixedField(
+                    (byte) ((MetaMessageTagAndType.FieldType.Version.ordinal()) | (1 << 5)));
             field.setContent(version);
             list.add(field);
         }
 
         // Check for Creation time and add
-        if(junoMsg.getOpType() ==  JunoMessage.OperationType.Create || junoMsg.getOpType() == JunoMessage.OperationType.Set){
+        if (junoMsg.getOpType() == JunoMessage.OperationType.Create
+                || junoMsg.getOpType() == JunoMessage.OperationType.Set) {
             long createTime = System.currentTimeMillis() / 1000;
             if (createTime != 0) {
-                MetaMessageFixedField field = new MetaMessageFixedField((byte) ((MetaMessageTagAndType.FieldType.CreationTime.ordinal()) | (1 << 5)));
+                MetaMessageFixedField field = new MetaMessageFixedField(
+                        (byte) ((MetaMessageTagAndType.FieldType.CreationTime.ordinal()) | (1 << 5)));
                 field.setContent(createTime);
                 list.add(field);
             }
@@ -319,16 +402,19 @@ public class JunoClientUtil {
         // Check for TTL and add
         long lifetime = junoMsg.getTimeToLiveSec();
         if (lifetime != 0) {
-            MetaMessageFixedField field = new MetaMessageFixedField((byte) ((MetaMessageTagAndType.FieldType.TimeToLive.ordinal()) | (1 << 5)));
+            MetaMessageFixedField field = new MetaMessageFixedField(
+                    (byte) ((MetaMessageTagAndType.FieldType.TimeToLive.ordinal()) | (1 << 5)));
             field.setContent(lifetime);
             list.add(field);
         }
 
-        //Add CAL Correlation ID
+        // Add CAL Correlation ID
         String corrId = String.valueOf(UUID.randomUUID());
-        if(corrId != null){
-            //System.out.println("Correlation ID available+++++++++++++++++++++++++++++++++++++++++++");
-            MetaMessageCorrelationIDField field = new MetaMessageCorrelationIDField((byte) ((MetaMessageTagAndType.FieldType.CorrelationID.ordinal()) | (0 << 5)));
+        if (corrId != null) {
+            // System.out.println("Correlation ID
+            // available+++++++++++++++++++++++++++++++++++++++++++");
+            MetaMessageCorrelationIDField field = new MetaMessageCorrelationIDField(
+                    (byte) ((MetaMessageTagAndType.FieldType.CorrelationID.ordinal()) | (0 << 5)));
             field.setCorrelationId(corrId.getBytes());
             list.add(field);
         }
@@ -338,13 +424,15 @@ public class JunoClientUtil {
         ByteBuffer buf = ByteBuffer.wrap(new byte[16]);
         buf.putLong(uuid.getMostSignificantBits());
         buf.putLong(uuid.getLeastSignificantBits());
-        MetaMessageFixedField field = new MetaMessageFixedField((byte) ((MetaMessageTagAndType.FieldType.RequestID.ordinal()) | (3 << 5)));
+        MetaMessageFixedField field = new MetaMessageFixedField(
+                (byte) ((MetaMessageTagAndType.FieldType.RequestID.ordinal()) | (3 << 5)));
         field.setVariableContent(buf.array());
         list.add(field);
         opMsg.getMetaComponent().setRequestId(buf.array());
 
         // Add source info
-        MetaMessageSourceField meta = new MetaMessageSourceField((byte) (MetaMessageTagAndType.FieldType.SourceInfo.ordinal()));
+        MetaMessageSourceField meta = new MetaMessageSourceField(
+                (byte) (MetaMessageTagAndType.FieldType.SourceInfo.ordinal()));
         if (junoMsg.getApplicationName() != null) {
             meta.setAppName(junoMsg.getApplicationName().getBytes());
         }
@@ -353,50 +441,53 @@ public class JunoClientUtil {
         meta.setPort(0); // Set this as 1 as of now.
         list.add(meta);
 
-        //*************************** Form the Payload Component **********************
+        // *************************** Form the Payload Component **********************
         PayloadOperationMessage pp = new PayloadOperationMessage(0L, (byte) OperationMessage.Type.Payload.getValue());
         pp.setKey(junoMsg.getKey());
         pp.setKeyLength(junoMsg.getKey().length);
         pp.setNamespace(junoMsg.getNameSpace().getBytes());
         pp.setNameSpaceLength((byte) junoMsg.getNameSpace().getBytes().length);
 
-        byte [] payload = junoMsg.getValue();
-        if(junoMsg.isPayloadCompressed()){
+        byte[] payload = junoMsg.getValue();
+        if (junoMsg.isPayloadCompressed()) {
             pp.setCompressionType(junoMsg.getCompressionType());
         }
         pp.setValue(payload);
         pp.setValueLength(payload == null ? 0 : payload.length);
         opMsg.setPayloadComponent(pp);
-        int len = metaComponents.getBufferLength()+pp.getBufferLength()+16;
+        int len = metaComponents.getBufferLength() + pp.getBufferLength() + 16;
         opMsg.getHeader().setMessageSize(len);
         junoMsg.setMessageSize(len);
         return opMsg;
     }
 
     /**
-     * This method decodes the Operation message got from Juno Server over the I/O channel and
+     * This method decodes the Operation message got from Juno Server over the I/O
+     * channel and
      * creates the JunoMessage object.
+     * 
      * @param opMsg - Operaion message got from Juno Server
-     * @param key - Key of record
+     * @param key   - Key of record
      * @return JunoMessage - Juno Message object
      */
-    public static JunoMessage decodeOperationMessage(OperationMessage opMsg, byte[] key, JunoClientConfigHolder configHolder) {
+    public static JunoMessage decodeOperationMessage(OperationMessage opMsg, byte[] key,
+            JunoClientConfigHolder configHolder) {
         JunoMessage message = new JunoMessage();
-        //Decode the Meta component
-        if(opMsg.getMetaComponent() != null){
+        // Decode the Meta component
+        if (opMsg.getMetaComponent() != null) {
             List<MetaMessageTagAndType> list = opMsg.getMetaComponent().getFieldList();
             long createTime = 0;
-            byte [] appName = null;
+            byte[] appName = null;
             long lifeTime = 0;
             long version = 0;
             long reqHandlingTime = 0;
-            for (int i = 0; i < list.size(); i ++) {
+            for (int i = 0; i < list.size(); i++) {
                 MetaMessageTagAndType type = list.get(i);
                 MetaMessageTagAndType.FieldType fieldType = type.getFieldType();
                 MetaMessageFixedField src;
                 switch (fieldType) {
                     case CreationTime:
-                        src = (MetaMessageFixedField)type;
+                        src = (MetaMessageFixedField) type;
                         createTime = src.getContent();
                         break;
                     case Dummy:
@@ -406,19 +497,19 @@ public class JunoClientUtil {
                     case RequestID:
                         break;
                     case SourceInfo:
-                        MetaMessageSourceField infoSrc = (MetaMessageSourceField)type;
+                        MetaMessageSourceField infoSrc = (MetaMessageSourceField) type;
                         appName = infoSrc.getAppName();
                         break;
                     case TimeToLive:
-                        src = (MetaMessageFixedField)type;
+                        src = (MetaMessageFixedField) type;
                         lifeTime = src.getContent();
                         break;
                     case Version:
-                        src = (MetaMessageFixedField)type;
+                        src = (MetaMessageFixedField) type;
                         version = src.getContent();
                         break;
                     case RequestHandlingTime:
-                        src = (MetaMessageFixedField)type;
+                        src = (MetaMessageFixedField) type;
                         reqHandlingTime = src.getContent();
                         break;
                     default:
@@ -433,29 +524,29 @@ public class JunoClientUtil {
             message.setReqHandlingTime(reqHandlingTime);
         }
 
-        //Decode the Header
-        int status = (int)opMsg.getHeader().getStatus();
+        // Decode the Header
+        int status = (int) opMsg.getHeader().getStatus();
         message.setStatus(ServerOperationStatus.get(status));
 
-        //Decode the Payload Component
+        // Decode the Payload Component
         PayloadOperationMessage pp = opMsg.getPayloadComponent();
 
         message.setValue("".getBytes()); // Set empty payload and later override with actual
-        if(pp != null){
+        if (pp != null) {
             if (pp.getValueLength() != 0) {
-                if(pp.getCompressedType() == PayloadOperationMessage.CompressionType.Snappy){
+                if (pp.getCompressedType() == PayloadOperationMessage.CompressionType.Snappy) {
                     try {
                         message.setValue(Snappy.uncompress(pp.getValue()));
                     } catch (IOException e) {
                         // TODO What to do?
-                        throw new JunoException("Exception while uncompressing data. "+e.getMessage());
+                        throw new JunoException("Exception while uncompressing data. " + e.getMessage());
                     }
-                }else{
+                } else {
                     message.setValue(pp.getValue());
                 }
             }
             message.setNameSpace(new String(pp.getNamespace()));
-            if(Arrays.equals(key,pp.getKey())){
+            if (Arrays.equals(key, pp.getKey())) {
                 // Log CAL event for mismatch in key. It should not happen.
             }
             message.setKey(pp.getKey());
@@ -467,11 +558,11 @@ public class JunoClientUtil {
         return message;
     }
 
-    private static InetAddress getLocalIp(){
+    private static InetAddress getLocalIp() {
         InetAddress localAddress;
-        try{
+        try {
             localAddress = InetAddress.getLocalHost();
-        }catch(UnknownHostException e){
+        } catch (UnknownHostException e) {
             localAddress = InetAddress.getLoopbackAddress();
         }
         return localAddress;
