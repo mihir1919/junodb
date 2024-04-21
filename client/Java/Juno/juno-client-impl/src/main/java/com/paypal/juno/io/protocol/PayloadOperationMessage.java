@@ -46,7 +46,10 @@ public class PayloadOperationMessage {
 
 	public enum CompressionType {
 		None("None"),
-		Snappy("Snappy");
+		Snappy("Snappy"),
+		LZ4("LZ4"),
+		GZIP("GZIP"),
+		ZSTD("ZSTD");
 
 		// More algorithm to be added in future
 		private final String cmpType;

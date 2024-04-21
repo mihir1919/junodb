@@ -28,9 +28,11 @@ import com.paypal.juno.exception.JunoInputException;
 import com.paypal.juno.io.protocol.*;
 import com.paypal.juno.transport.socket.SocketConfigHolder;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.codec.binary.Hex;
@@ -41,7 +43,12 @@ import reactor.core.publisher.FluxSink;
 import rx.Subscriber;
 import net.jpountz.lz4.*;
 import com.github.luben.zstd.*;
+import com.ning.compress.lzf.LZFDecoder;
+import com.ning.compress.lzf.LZFEncoder;
+import com.ning.compress.lzf.LZFException;
+
 import java.util.zip.*;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -202,20 +209,23 @@ public class JunoClientUtil {
                     byte[] uncompressedData = req.getValue();
 
                     // Create a compression instance
-                    LZ4Factory factory = LZ4Factory.fastestInstance();
-                    LZ4Compressor compressor = factory.fastCompressor();
-
-                    // Allocate buffer for compressed data
-                    int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
-                    byte[] compressedData = new byte[maxCompressedLength];
-
-                    // Compress the data
-                    int compressedLength = compressor.compress(uncompressedData, 0, uncompressedData.length,
-                            compressedData, 0);
-
-                    // If you want to resize the array to fit the exact compressed data, you can do
-                    // so
-                    byte[] compressedPayloadLZ4 = Arrays.copyOf(compressedData, compressedLength);
+//                    LZ4Factory factory = LZ4Factory.fastestInstance();
+//                    LZ4Compressor compressor = factory.fastCompressor();
+//
+//                    // Allocate buffer for compressed data
+//                    int maxCompressedLength = compressor.maxCompressedLength(uncompressedData.length);
+//                    byte[] compressedData = new byte[maxCompressedLength];
+//
+//                    // Compress the data
+//                    int compressedLength = compressor.compress(uncompressedData, 0, uncompressedData.length,
+//                            compressedData, 0);
+//
+//                    // If you want to resize the array to fit the exact compressed data, you can do
+//                    // so
+//                    byte[] compressedPayloadLZ4 = Arrays.copyOf(compressedData, compressedLength);
+                    
+                    
+                    byte[] compressedPayloadLZ4 = LZFEncoder.encode(uncompressedData);
 
                     // Assuming req.getValue() returns a byte array
                     byte[] uncompressedDataZS = req.getValue();
@@ -233,19 +243,11 @@ public class JunoClientUtil {
                     byte[] compressedDataGZIP = null;
 
                     try {
-                        // Create a ByteArrayOutputStream to hold the compressed data
-                        ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
-
-                        // Create a GZIPOutputStream to compress the data
-                        try (GZIPOutputStream gzipStream = new GZIPOutputStream(byteStream)) {
-                            // Write the uncompressed data to the GZIPOutputStream
-                            gzipStream.write(uncompressedData);
-                        }
-
-                        // Get the compressed data as a byte array
-                        compressedDataGZIP = byteStream.toByteArray();
-
-                        // Now you have the compressed data in the compressedData array
+                		final ByteArrayOutputStream out = new ByteArrayOutputStream();
+                		try (final OutputStream gzip = new GZIPOutputStream(out)) {
+                			gzip.write(uncompressedData);
+                		}
+                		compressedDataGZIP = out.toByteArray();
                     } catch (IOException e) {
                         // Handle any potential IO exceptions
                         e.printStackTrace(); // Or handle it according to your application's logic
@@ -253,12 +255,59 @@ public class JunoClientUtil {
 
                     // Calculate % compression achieved
                     int compPercent = 100 - ((compressedPayload.length * 100) / req.getValue().length);
-                    if (compPercent > 0) { // do compression only if its effective
-                        payload = compressedPayload;
-                        // Currently we have only one compression type
-                        junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.Snappy);
-                        junoMsg.setPayloadCompressed(true);
-                        junoMsg.setCompressionAchieved(compPercent);
+                    int compPercentZSTD = 100 - ((compressedDataZS.length * 100) / req.getValue().length);
+
+                    int compPercentLZ4 = 100 - ((compressedPayloadLZ4.length * 100) / req.getValue().length);
+                    int compPercentGZIP = 100 - ((compressedDataGZIP.length * 100) / req.getValue().length);
+
+                    // 0 - Snappy, 1- ZSTD, 2-LZ4, 3-GZIP
+                    int compressionTypeChosen = 3;
+
+                    if (compPercent > 0 || compPercentZSTD > 0 || compPercentLZ4 > 0 || compPercentGZIP > 0) { // do
+                                                                                                               // compression
+                                                                                                               // only
+                                                                                                               // if its
+                                                                                                               // effective
+
+//                        if (compPercent < Math.max(compPercentGZIP, Math.max(compPercentZSTD, compPercentLZ4))) {
+//                            compressionTypeChosen = 0;
+//                        } else if (compPercentZSTD < Math.max(compPercentGZIP, Math.max(compPercent, compPercentLZ4))) {
+//                            compressionTypeChosen = 1;
+//                        } else if (compPercentLZ4 < Math.max(compPercentGZIP, Math.max(compPercentZSTD, compPercent))) {
+//                            compressionTypeChosen = 2;
+//                        } else if (compPercentGZIP < Math.max(compPercent, Math.max(compPercentZSTD, compPercentLZ4))) {
+//                            compressionTypeChosen = 3;
+//                        }
+//                    	compressionTypeChosen = 1;
+
+                        if (compressionTypeChosen == 0) {
+                            payload = compressedPayload;
+                            // Currently we have only one compression type
+                            junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.Snappy);
+                            junoMsg.setPayloadCompressed(true);
+                            junoMsg.setCompressionAchieved(compPercent);
+                        } else if (compressionTypeChosen == 1) {
+                        	payload = compressedDataZS;
+                            // Currently we have only one compression type
+                            junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.ZSTD);
+                            junoMsg.setPayloadCompressed(true);
+                            junoMsg.setCompressionAchieved(compPercentZSTD);
+                        } else if (compressionTypeChosen == 2) {
+                        	payload = compressedPayloadLZ4;
+                            // Currently we have only one compression type
+                            junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.LZ4);
+                            junoMsg.setPayloadCompressed(true);
+                            junoMsg.setCompressionAchieved(compPercentLZ4);
+                        } else if (compressionTypeChosen == 3) {
+                            payload = compressedDataGZIP;
+                            // Currently we have only one compression type
+                            junoMsg.setCompressionType(PayloadOperationMessage.CompressionType.GZIP);
+                            junoMsg.setPayloadCompressed(true);
+                            junoMsg.setCompressionAchieved(compPercentGZIP);
+                        } else {
+                            junoMsg.setPayloadCompressed(false);
+                        }
+
                     }
                 } catch (IOException e) {
                     // Exception while compressing so continue without compressing
@@ -469,9 +518,10 @@ public class JunoClientUtil {
      * @param opMsg - Operaion message got from Juno Server
      * @param key   - Key of record
      * @return JunoMessage - Juno Message object
+     * @throws LZFException 
      */
     public static JunoMessage decodeOperationMessage(OperationMessage opMsg, byte[] key,
-            JunoClientConfigHolder configHolder) {
+            JunoClientConfigHolder configHolder) throws LZFException {
         JunoMessage message = new JunoMessage();
         // Decode the Meta component
         if (opMsg.getMetaComponent() != null) {
@@ -533,6 +583,7 @@ public class JunoClientUtil {
 
         message.setValue("".getBytes()); // Set empty payload and later override with actual
         if (pp != null) {
+        	
             if (pp.getValueLength() != 0) {
                 if (pp.getCompressedType() == PayloadOperationMessage.CompressionType.Snappy) {
                     try {
@@ -541,7 +592,41 @@ public class JunoClientUtil {
                         // TODO What to do?
                         throw new JunoException("Exception while uncompressing data. " + e.getMessage());
                     }
-                } else {
+                } else if (pp.getCompressedType() == PayloadOperationMessage.CompressionType.ZSTD) {
+                	try{
+                		byte[] dest = Zstd.decompress(pp.getValue(), pp.getValue().length * 3) ;
+                		message.setValue(dest);
+                	}
+                	catch(Exception e) {
+                        throw new JunoException("Exception while uncompressing data. " + e.getMessage());
+                	}
+                	
+                } else if (pp.getCompressedType() == PayloadOperationMessage.CompressionType.LZ4) {
+                	byte[] compressedData = pp.getValue(); // Assuming pp.getValue() returns your compressedPayloadLZ4
+                	try{
+                		message.setValue(LZFDecoder.decode(compressedData));
+                	}
+                	catch(Exception e) {
+                        throw new JunoException("Exception while uncompressing data. " + e.getMessage());
+                	}
+
+                } else if (pp.getCompressedType() == PayloadOperationMessage.CompressionType.GZIP) {
+                	
+                	try (final GZIPInputStream ungzip = new GZIPInputStream(new ByteArrayInputStream(pp.getValue()))) {
+            			final ByteArrayOutputStream out = new ByteArrayOutputStream();
+            			final byte[] data = new byte[8192];
+            			int nRead;
+            			while ((nRead = ungzip.read(data)) != -1) {
+            				out.write(data, 0, nRead);
+            			}
+            			message.setValue(out.toByteArray());
+            		} catch (IOException e) {
+                        // TODO What to do?
+                        throw new JunoException("Exception while uncompressing data. " + e.getMessage());
+                    }
+                }
+
+                else {
                     message.setValue(pp.getValue());
                 }
             }
